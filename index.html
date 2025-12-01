@@ -1,0 +1,854 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>忆柠-moment</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script>
+      tailwind.config = {
+        darkMode: 'class',
+        theme: {
+          extend: {
+            animation: {
+              float: 'float 6s ease-in-out infinite',
+              breathe: 'breathe 8s ease-in-out infinite',
+              'fade-in': 'fadeIn 0.75s ease-out forwards',
+            },
+            keyframes: {
+              float: {
+                '0%, 100%': { transform: 'translateY(0)' },
+                '50%': { transform: 'translateY(-20px)' },
+              },
+              breathe: {
+                '0%, 100%': { transform: 'scale(1)', opacity: '0.8' },
+                '50%': { transform: 'scale(1.5)', opacity: '0.4' },
+              },
+              fadeIn: {
+                '0%': { opacity: '0', transform: 'translateY(10px)' },
+                '100%': { opacity: '1', transform: 'translateY(0)' },
+              },
+            },
+          },
+        },
+      };
+    </script>
+    <style>
+      body {
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        background-color: #000; /* fallback while视频未加载 */
+        transition: background-color 0.5s ease;
+        min-height: 100vh;
+      }
+      #bg-video {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        z-index: -1;
+        opacity: 0.25;
+        filter: blur(1px);
+        pointer-events: none;
+      }
+      .dark body {
+        background-color: #111827;
+      }
+      ::-webkit-scrollbar {
+        width: 8px;
+      }
+      ::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #bfbcc6;
+        border-radius: 4px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: #9d98a6;
+      }
+    </style>
+</head>
+  <body>
+    <video id="bg-video" autoplay muted loop playsinline></video>
+    <script>
+      (function() {
+        const video = document.getElementById('bg-video');
+        if (video) {
+          video.src = encodeURI('Sleep Better on a Rainy Day ｜ The Soft Sound of Rain on the Window Makes You Free Your Mind& Relax⛈️.libplacebo.mp4');
+          video.muted = true;
+          video.loop = true;
+          video.autoplay = true;
+          video.play().catch(() => {
+            console.warn('浏览器阻止了自动播放，需用户交互后播放背景视频');
+          });
+          video.load();
+        }
+      })();
+    </script>
+    <div id="root"></div>
+    <script type="text/babel" data-presets="react">
+      const {
+        useCallback,
+        useEffect,
+        useMemo,
+        useRef,
+        useState,
+      } = React;
+
+      const AppState = {
+        IDLE: 'IDLE',
+        SELECT_DURATION: 'SELECT_DURATION',
+        BREATHING: 'BREATHING',
+        GENERATING: 'GENERATING',
+        SHOWING_INSIGHT: 'SHOWING_INSIGHT',
+      };
+
+      const mockInsights = [
+        {
+          haiku: '静坐听雨\n风拂松影摇\n心自归一',
+          quote: '心若冰清，天塌不惊。',
+          author: '古语',
+          tip: '闭上眼睛，深吸三口气，感受空气穿过鼻尖。',
+        },
+        {
+          haiku: '月落山前\n呼吸如潮起\n念随星沉',
+          quote: '万物静观皆自得。',
+          author: '程颢',
+          tip: '将注意力放在脚底，感受与地面的连接。',
+        },
+        {
+          haiku: '晨雾未散\n心念化清泉\n轻舟自渡',
+          quote: '当下即是唯一的时刻。',
+          author: '禅语',
+          tip: '写下一件让你心怀感激的小事。',
+        },
+      ];
+
+      const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+      const generateInsight = async () => {
+        await delay(700);
+        return mockInsights[Math.floor(Math.random() * mockInsights.length)];
+      };
+
+      class AudioManager {
+        constructor() {
+          this.audio = null;
+          this.fadeFrame = null;
+          this.currentVolume = 0;
+          this.targetVolume = 0.9;
+          this.src = 'BigRicePiano - Waves That Sound Like You.flac';
+        }
+
+        ensureAudio() {
+          if (!this.audio) {
+            const encodedSrc = encodeURI(this.src);
+            this.audio = new Audio(encodedSrc);
+            this.audio.loop = true;
+            this.audio.volume = 0;
+            this.audio.preload = 'auto';
+          }
+          return this.audio;
+        }
+
+        toggleBGM(enable) {
+          const audio = this.ensureAudio();
+          if (!audio) return;
+
+          if (enable) {
+            audio
+              .play()
+              .then(() => this.fadeTo(this.targetVolume))
+              .catch(() => {
+                console.warn('需要用户交互以允许音频播放');
+              });
+          } else {
+            this.fadeTo(0, () => {
+              audio.pause();
+              audio.currentTime = 0;
+            });
+          }
+        }
+
+        fadeTo(volume, onDone) {
+          const audio = this.ensureAudio();
+          cancelAnimationFrame(this.fadeFrame);
+
+          const animate = () => {
+            const diff = volume - this.currentVolume;
+            if (Math.abs(diff) < 0.01) {
+              this.currentVolume = volume;
+              audio.volume = this.currentVolume;
+              if (onDone) onDone();
+              return;
+            }
+            this.currentVolume += diff * 0.15;
+            audio.volume = Math.max(0, Math.min(this.currentVolume, 1));
+            this.fadeFrame = requestAnimationFrame(animate);
+          };
+
+          animate();
+        }
+      }
+
+      const audioManager = new AudioManager();
+
+      const CALM_BREATHING_STEPS = [
+        { label: '吸气 (Inhale)', duration: 4000, scale: 2.2, opacity: 1 },
+        { label: '呼气 (Exhale)', duration: 6000, scale: 1.0, opacity: 0.6 },
+      ];
+
+      const MOODS = [
+        {
+          id: 'calm',
+          label: '平静 (Calm)',
+          icon: 'cloud',
+          color: 'bg-teal-100 text-teal-700',
+          gradient: 'from-teal-50 to-teal-100',
+          tipTextClass: 'text-teal-800 dark:text-teal-100',
+          breathingMode: {
+            name: '共鸣呼吸 (Resonance)',
+            description: '平衡身心',
+            steps: [
+              { label: '吸气 (Inhale)', duration: 5000, scale: 2.2, opacity: 1 },
+              { label: '呼气 (Exhale)', duration: 5000, scale: 1.0, opacity: 0.6 },
+            ],
+          },
+        },
+        {
+          id: 'anxious',
+          label: '焦虑 (Anxious)',
+          icon: 'wind',
+          color: 'bg-orange-100 text-orange-700',
+          gradient: 'from-orange-50 to-orange-100',
+          tipTextClass: 'text-orange-900 dark:text-orange-100',
+          breathingMode: {
+            name: '4-7-8 呼吸法',
+            description: '缓解焦虑',
+            steps: [
+              { label: '吸气 (Inhale)', duration: 4000, scale: 2.2, opacity: 1 },
+              { label: '屏息 (Hold)', duration: 7000, scale: 2.2, opacity: 1 },
+              { label: '呼气 (Exhale)', duration: 8000, scale: 1.0, opacity: 0.6 },
+            ],
+          },
+        },
+        {
+          id: 'creative',
+          label: '灵感 (Creative)',
+          icon: 'zap',
+          color: 'bg-purple-100 text-purple-700',
+          gradient: 'from-purple-50 to-purple-100',
+          tipTextClass: 'text-purple-900 dark:text-purple-100',
+          breathingMode: {
+            name: '流动呼吸 (Flow)',
+            description: '激活思维',
+            steps: [
+              { label: '吸气 (Inhale)', duration: 4000, scale: 2.4, opacity: 1 },
+              { label: '屏息 (Hold)', duration: 2000, scale: 2.4, opacity: 1 },
+              { label: '呼气 (Exhale)', duration: 4000, scale: 1.0, opacity: 0.6 },
+              { label: '屏息 (Hold)', duration: 1000, scale: 1.0, opacity: 0.6 },
+            ],
+          },
+        },
+        {
+          id: 'tired',
+          label: '疲惫 (Tired)',
+          icon: 'moon',
+          color: 'bg-indigo-100 text-indigo-700',
+          gradient: 'from-indigo-50 to-indigo-100',
+          tipTextClass: 'text-indigo-900 dark:text-indigo-100',
+          breathingMode: {
+            name: '充能呼吸 (Energy)',
+            description: '唤醒身体',
+            steps: [
+              { label: '吸气 (Inhale)', duration: 6000, scale: 2.5, opacity: 1 },
+              { label: '屏息 (Hold)', duration: 2000, scale: 2.5, opacity: 1 },
+              { label: '呼气 (Exhale)', duration: 4000, scale: 1.0, opacity: 0.6 },
+            ],
+          },
+        },
+        {
+          id: 'stressed',
+          label: '压力 (Stressed)',
+          icon: 'sun',
+          color: 'bg-red-100 text-red-700',
+          gradient: 'from-red-50 to-red-100',
+          tipTextClass: 'text-red-900 dark:text-red-100',
+          breathingMode: {
+            name: '箱式呼吸 (Box)',
+            description: '重获掌控',
+            steps: [
+              { label: '吸气 (Inhale)', duration: 4000, scale: 2.2, opacity: 1 },
+              { label: '屏息 (Hold)', duration: 4000, scale: 2.2, opacity: 1 },
+              { label: '呼气 (Exhale)', duration: 4000, scale: 1.0, opacity: 0.6 },
+              { label: '屏息 (Hold)', duration: 4000, scale: 1.0, opacity: 0.6 },
+            ],
+          },
+        },
+        {
+          id: 'angry',
+          label: '愤怒 (Angry)',
+          icon: 'flame',
+          color: 'bg-rose-100 text-rose-700',
+          gradient: 'from-rose-50 to-rose-100',
+          tipTextClass: 'text-rose-900 dark:text-rose-100',
+          breathingMode: {
+            name: '释放呼吸 (Release)',
+            description: '平息怒火',
+            steps: [
+              { label: '吸气 (Inhale)', duration: 4000, scale: 2.4, opacity: 1 },
+              { label: '屏息 (Hold)', duration: 2000, scale: 2.4, opacity: 1 },
+              { label: '呼气 (Exhale)', duration: 8000, scale: 1.0, opacity: 0.6 },
+            ],
+          },
+        },
+      ];
+
+      const Icon = ({ symbol }) => (
+        <span className="text-2xl" role="img" aria-hidden="true">
+          {symbol}
+        </span>
+      );
+
+      const IconMap = {
+        cloud: <Icon symbol="☁️" />,
+        wind: <Icon symbol="🍵" />,
+        zap: <Icon symbol="⚡" />,
+        moon: <Icon symbol="🌙" />,
+        sun: <Icon symbol="☀️" />,
+        flame: <Icon symbol="🔥" />,
+      };
+
+      const MoodGrid = ({ onSelect }) => (
+        <div className="w-full max-w-2xl mx-auto p-4">
+          <h2 className="text-center text-xl text-gray-500 dark:text-gray-400 mb-8 font-light tracking-wide animate-fade-in">
+            此刻的心情如何？<br /><span className="text-sm opacity-60"
+              >How are you feeling right now?</span
+            >
+          </h2>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+            {MOODS.map((mood, index) => (
+              <button
+                key={mood.id}
+                onClick={() => onSelect(mood.id)}
+                className="group relative overflow-hidden p-6 rounded-2xl transition-all duration-300 hover:shadow-lg hover:-translate-y-1 bg-white border border-gray-100 dark:bg-gray-800 dark:border-gray-700 flex flex-col items-center justify-center gap-3 animate-fade-in"
+                style={{ animationDelay: `${index * 100}ms` }}
+              >
+                <div
+                  className={`absolute inset-0 bg-gradient-to-br ${mood.gradient} opacity-0 group-hover:opacity-100 transition-opacity duration-500`}
+                ></div>
+                <div
+                  className={`relative z-10 p-3 rounded-full ${mood.color} bg-opacity-20 dark:bg-opacity-20 dark:bg-gray-700 group-hover:bg-opacity-0 transition-all`}
+                >
+                  {IconMap[mood.icon]}
+                </div>
+                <span className="relative z-10 text-gray-700 dark:text-gray-200 font-medium">
+                  {mood.label}
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      );
+
+      const PRESETS = [
+        { label: '30 秒 (30s)', value: 30 * 1000 },
+        { label: '1 分钟 (1m)', value: 60 * 1000 },
+        { label: '3 分钟 (3m)', value: 3 * 60 * 1000 },
+      ];
+
+      const DurationSelector = ({ onSelect, onBack }) => {
+        const [customMinutes, setCustomMinutes] = useState(5);
+        return (
+          <div className="w-full max-w-2xl mx-auto p-4 animate-fade-in">
+            <div className="text-center mb-10 space-y-2">
+              <h2 className="text-2xl text-gray-700 dark:text-gray-200 font-light">
+                选择呼吸时长
+              </h2>
+              <p className="text-gray-500 dark:text-gray-400 text-sm">
+                Choose your breathing duration
+              </p>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+              {PRESETS.map((preset) => (
+                <button
+                  key={preset.value}
+                  onClick={() => onSelect(preset.value)}
+                  className="group p-6 rounded-2xl bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 hover:shadow-lg hover:-translate-y-1 hover:border-teal-200 dark:hover:border-teal-700 transition-all duration-300 flex flex-col items-center gap-3"
+                >
+                  <div className="p-3 rounded-full bg-teal-50 text-teal-600 dark:bg-gray-700 dark:text-teal-400 group-hover:bg-teal-100 dark:group-hover:bg-gray-600 transition-colors">
+                    <span role="img" aria-label="Preset" className="text-2xl">⏳</span>
+                  </div>
+                  <span className="font-medium text-gray-700 dark:text-gray-200">
+                    {preset.label}
+                  </span>
+                </button>
+              ))}
+            </div>
+            <div className="bg-white dark:bg-gray-800 rounded-2xl p-8 border border-gray-100 dark:border-gray-700 shadow-sm">
+              <div className="flex items-center gap-3 mb-6">
+                <span className="text-xl text-gray-400" role="img" aria-label="Clock">🕒</span>
+                <h3 className="text-lg font-medium text-gray-700 dark:text-gray-200">
+                  自定义时长 (Custom)
+                </h3>
+              </div>
+              <div className="space-y-6">
+                <div className="flex justify-between items-end">
+                  <span className="text-4xl font-light text-teal-600 dark:text-teal-400">
+                    {customMinutes}{' '}
+                    <span className="text-lg text-gray-500 dark:text-gray-400"
+                      >min</span
+                    >
+                  </span>
+                  <span className="text-sm text-gray-400 mb-1">Max 60 min</span>
+                </div>
+                <input
+                  type="range"
+                  min="1"
+                  max="60"
+                  value={customMinutes}
+                  onChange={(e) => setCustomMinutes(parseInt(e.target.value, 10))}
+                  className="w-full h-2 bg-gray-200 dark:bg-gray-700 rounded-lg appearance-none cursor-pointer accent-teal-600 dark:accent-teal-500"
+                />
+                <button
+                  onClick={() => onSelect(customMinutes * 60 * 1000)}
+                  className="w-full py-4 mt-4 bg-gray-900 dark:bg-gray-700 text-white rounded-xl hover:bg-gray-800 dark:hover:bg-gray-600 transition-colors font-medium tracking-wide"
+                >
+                  开始呼吸 (Start {customMinutes}m)
+                </button>
+              </div>
+            </div>
+            <button
+              onClick={onBack}
+              className="mt-8 w-full text-center text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300 text-sm"
+            >
+              返回上一步 (Back)
+            </button>
+          </div>
+        );
+      };
+
+      const BreathingCircle = ({
+        moodConfig,
+        duration,
+        onComplete,
+        musicEnabled,
+      }) => {
+        const [phase, setPhase] = useState('COUNTDOWN');
+        const [countdown, setCountdown] = useState(3);
+        const [timeLeft, setTimeLeft] = useState(duration);
+        const [currentStep, setCurrentStep] = useState({
+          label: '准备 (Ready)',
+          duration: 0,
+          scale: 1,
+          opacity: 1,
+        });
+        const [instruction, setInstruction] = useState('准备 (Ready)');
+
+        const stepIndexRef = useRef(0);
+        const cycleCountRef = useRef(0);
+        const timeoutRef = useRef(null);
+        const timerIntervalRef = useRef(null);
+        const MIN_MOOD_CYCLES = 2;
+
+        const formatTime = (ms) => {
+          const totalSeconds = Math.ceil(ms / 1000);
+          const m = Math.floor(totalSeconds / 60);
+          const s = totalSeconds % 60;
+          return `${m}:${s.toString().padStart(2, '0')}`;
+        };
+
+        useEffect(() => {
+          if (phase === 'BREATHING') {
+            audioManager.toggleBGM(musicEnabled);
+          }
+          return () => {
+            audioManager.toggleBGM(false);
+          };
+        }, [musicEnabled, phase]);
+
+        useEffect(() => {
+          if (phase === 'COUNTDOWN') {
+            const countdownInterval = setInterval(() => {
+              setCountdown((prev) => {
+                if (prev <= 1) {
+                  clearInterval(countdownInterval);
+                  setPhase('BREATHING');
+                  return 0;
+                }
+                return prev - 1;
+              });
+            }, 1000);
+            return () => clearInterval(countdownInterval);
+          }
+
+          if (phase === 'BREATHING') {
+            timerIntervalRef.current = setInterval(() => {
+              setTimeLeft((prev) => (prev <= 1000 ? 0 : prev - 1000));
+            }, 1000);
+
+            const startTime = Date.now();
+
+            const runBreathingLoop = () => {
+              const useCalmPattern = cycleCountRef.current >= MIN_MOOD_CYCLES;
+              const currentPatternSteps = useCalmPattern
+                ? CALM_BREATHING_STEPS
+                : moodConfig.breathingMode.steps;
+              const step = currentPatternSteps[stepIndexRef.current];
+
+              setCurrentStep(step);
+              setInstruction(step.label);
+
+              timeoutRef.current = setTimeout(() => {
+                const isEndOfCycle =
+                  stepIndexRef.current === currentPatternSteps.length - 1;
+
+                if (isEndOfCycle) {
+                  cycleCountRef.current += 1;
+                  stepIndexRef.current = 0;
+                  const elapsed = Date.now() - startTime;
+                  if (elapsed >= duration - 1000) {
+                    clearInterval(timerIntervalRef.current);
+                    setPhase('DONE');
+                    onComplete();
+                    return;
+                  }
+                } else {
+                  stepIndexRef.current += 1;
+                }
+
+                runBreathingLoop();
+              }, step.duration);
+            };
+
+            runBreathingLoop();
+
+            return () => {
+              if (timeoutRef.current) clearTimeout(timeoutRef.current);
+              if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+            };
+          }
+        }, [phase, moodConfig, onComplete, duration]);
+
+        const handleFinishEarly = () => {
+          if (timeoutRef.current) clearTimeout(timeoutRef.current);
+          if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
+          audioManager.toggleBGM(false);
+          setPhase('DONE');
+          onComplete();
+        };
+
+        const colorClass = moodConfig.color.split(' ')[0];
+        const accentClass = colorClass.replace(/\d+/, '500');
+
+        if (phase === 'COUNTDOWN') {
+          return (
+            <div className="flex flex-col items-center justify-center min-h-[50vh] animate-fade-in">
+              <div className="text-8xl font-light text-gray-300 dark:text-gray-600 font-mono animate-pulse">
+                {countdown}
+              </div>
+              <p className="mt-8 text-gray-500 dark:text-gray-400 tracking-widest uppercase text-sm">
+                Relax & Focus
+              </p>
+            </div>
+          );
+        }
+
+        return (
+          <div className="flex flex-col items-center justify-center space-y-12 animate-fade-in py-8 relative w-full overflow-hidden">
+            <div className="absolute top-0 right-0 md:right-10 flex items-center gap-2 text-gray-400 dark:text-gray-500 font-mono text-sm bg-white/50 dark:bg-black/20 px-3 py-1 rounded-full backdrop-blur-sm z-50">
+              <span role="img" aria-label="Timer">⏱️</span>
+              <span>{formatTime(timeLeft)}</span>
+            </div>
+            <div className="relative flex items-center justify-center w-[500px] h-[500px]">
+              <div
+                className={`absolute w-60 h-60 rounded-full opacity-10 dark:opacity-5 ${colorClass} blur-3xl transition-all duration-[3000ms]`}
+                style={{ transform: `scale(${currentStep.scale * 1.5})` }}
+              ></div>
+              <div
+                className={`absolute w-60 h-60 rounded-full opacity-30 dark:opacity-20 ${colorClass} blur-2xl`}
+                style={{
+                  transform: `scale(${currentStep.scale})`,
+                  transition: `transform ${currentStep.duration}ms ease-in-out`,
+                }}
+              ></div>
+              <div
+                className="relative flex items-center justify-center w-40 h-40 rounded-full shadow-2xl bg-white dark:bg-gray-800 z-10 border-4 border-gray-50 dark:border-gray-700"
+                style={{
+                  transform: `scale(${currentStep.scale === 1.0 ? 1.0 : 1.15})`,
+                  transition: `transform ${currentStep.duration}ms ease-in-out`,
+                }}
+              >
+                <div className={`w-3 h-3 rounded-full ${accentClass} opacity-50`}></div>
+              </div>
+            </div>
+            <div className="text-center space-y-4 h-24 z-20">
+              <h3 className="text-3xl md:text-5xl font-light text-gray-700 dark:text-gray-200 tracking-wider transition-all duration-500">
+                {instruction}
+              </h3>
+              <div className="flex flex-col gap-1">
+                <p className="text-gray-400 dark:text-gray-500 text-sm font-medium uppercase tracking-widest">
+                  {cycleCountRef.current < 2
+                    ? moodConfig.breathingMode.name
+                    : '回归平静 (Calming Down)'}
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={handleFinishEarly}
+              className="mt-12 px-10 py-3 rounded-full bg-white/40 dark:bg-white/10 hover:bg-white/60 dark:hover:bg-white/20 border border-white/50 dark:border-white/10 text-gray-800 dark:text-gray-100 shadow-lg hover:shadow-xl backdrop-blur-md text-sm tracking-[0.2em] uppercase font-semibold transition-all duration-300 z-20"
+            >
+              结束
+            </button>
+          </div>
+        );
+      };
+
+      const InsightCard = ({ data, moodConfig, onReset }) => (
+        <div className="w-full max-w-md mx-auto animate-fade-in">
+          <div className="bg-white/80 dark:bg-gray-800/90 backdrop-blur-xl rounded-3xl shadow-2xl overflow-hidden border border-white/50 dark:border-gray-700 transition-colors duration-500">
+            <div className={`h-2 bg-gradient-to-r ${moodConfig.gradient}`}></div>
+            <div className="p-8 md:p-10 space-y-8">
+              <div className="text-center space-y-2">
+                <h3 className="text-xs uppercase tracking-[0.2em] text-gray-400 dark:text-gray-500 font-semibold">
+                  Haiku
+                </h3>
+                <div className="text-xl md:text-2xl text-gray-800 dark:text-gray-100 font-serif leading-relaxed italic whitespace-pre-line">
+                  {data.haiku}
+                </div>
+              </div>
+              <div className="border-t border-gray-100 dark:border-gray-700 w-1/2 mx-auto"></div>
+              <div className="space-y-4">
+                <blockquote className="text-lg text-gray-600 dark:text-gray-300 text-center font-light leading-loose">
+                  "{data.quote}"
+                </blockquote>
+                <p className="text-right text-sm text-gray-400 dark:text-gray-500">
+                  — {data.author}
+                </p>
+              </div>
+              <div
+                className={`relative overflow-hidden bg-gradient-to-br ${moodConfig.gradient} dark:bg-none dark:bg-gray-700/30 rounded-xl p-5 transform transition-transform hover:scale-[1.02] border border-transparent dark:border-gray-600`}
+              >
+                <div className="flex items-center gap-3 mb-2">
+                  <div className={`w-2 h-2 rounded-full ${moodConfig.color.split(' ')[0]}`}></div>
+                  <h4 className={`text-sm font-semibold uppercase tracking-wider ${moodConfig.tipTextClass}`}>
+                    Mindful Action
+                  </h4>
+                </div>
+                <p className={`text-sm leading-relaxed ${moodConfig.tipTextClass}`}>
+                  {data.tip}
+                </p>
+              </div>
+            </div>
+            <div className="bg-gray-50 dark:bg-gray-900/50 px-8 py-4 flex justify-between items-center border-t border-gray-100 dark:border-gray-700">
+              <button
+                onClick={onReset}
+                className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 transition-colors"
+              >
+                <span role="img" aria-label="Reset">🔄</span>
+                <span>重新开始</span>
+              </button>
+              <button
+                className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200 transition-colors opacity-50 cursor-not-allowed"
+                title="Sharing coming soon"
+              >
+                <span role="img" aria-label="Share">📤</span>
+                <span>分享</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+
+      const App = () => {
+        const [appState, setAppState] = useState(AppState.IDLE);
+        const [selectedMood, setSelectedMood] = useState(null);
+        const [selectedDuration, setSelectedDuration] = useState(30000);
+        const [insight, setInsight] = useState(null);
+        const [darkMode, setDarkMode] = useState(false);
+        const [musicEnabled, setMusicEnabled] = useState(false);
+        const insightPromise = useRef(null);
+
+        useEffect(() => {
+          if (darkMode) {
+            document.documentElement.classList.add('dark');
+          } else {
+            document.documentElement.classList.remove('dark');
+          }
+        }, [darkMode]);
+
+        const currentMoodConfig = useMemo(
+          () => MOODS.find((m) => m.id === selectedMood) || null,
+          [selectedMood]
+        );
+
+        const handleMoodSelect = useCallback((mood) => {
+          setSelectedMood(mood);
+          setAppState(AppState.SELECT_DURATION);
+        }, []);
+
+        const handleDurationSelect = useCallback(
+          (duration) => {
+            setSelectedDuration(duration);
+            setAppState(AppState.BREATHING);
+            insightPromise.current = generateInsight();
+          },
+          []
+        );
+
+        const handleBreathingComplete = useCallback(async () => {
+          if (!selectedMood) return;
+          setAppState(AppState.GENERATING);
+          try {
+            const [data] = await Promise.all([
+              insightPromise.current || generateInsight(),
+              delay(750),
+            ]);
+            setInsight(data);
+            setAppState(AppState.SHOWING_INSIGHT);
+          } catch (error) {
+            console.error('Failed to generate insight', error);
+            setAppState(AppState.IDLE);
+          }
+        }, [selectedMood]);
+
+        const handleReset = useCallback(() => {
+          setAppState(AppState.IDLE);
+          setSelectedMood(null);
+          setInsight(null);
+          insightPromise.current = null;
+          audioManager.toggleBGM(false);
+        }, []);
+
+        const toggleMusic = () => {
+          const next = !musicEnabled;
+          setMusicEnabled(next);
+          audioManager.toggleBGM(next);
+        };
+
+        const getOverlayClass = () => {
+          if (darkMode) {
+            return 'bg-gradient-to-br from-black/80 via-gray-900/70 to-black/80';
+          }
+          if (!currentMoodConfig) {
+            return 'bg-gradient-to-br from-white/80 via-white/60 to-white/80';
+          }
+          return `bg-gradient-to-br ${currentMoodConfig.gradient} opacity-70`;
+        };
+
+        return (
+          <div className="relative min-h-screen text-gray-800 dark:text-gray-100">
+            <div
+              className={`absolute inset-0 transition-all duration-700 ease-in-out ${getOverlayClass()} pointer-events-none mix-blend-normal`}
+            ></div>
+            <div className="relative flex flex-col min-h-screen">
+              <header className="sticky top-0 w-full p-6 flex items-center justify-between z-50 backdrop-blur-sm bg-white/30 dark:bg-black/20 transition-all duration-300">
+              <button
+                onClick={handleReset}
+                className="flex items-center gap-2 text-gray-700 dark:text-gray-200 hover:opacity-80 transition-opacity"
+              >
+                <span className="animate-float text-2xl" role="img" aria-label="Breeze">💨</span>
+                <h1 className="text-xl font-semibold tracking-tight hidden sm:block">
+                  Mindful Moments
+                </h1>
+              </button>
+              <div className="flex items-center gap-3 bg-white/50 dark:bg-black/30 p-1.5 rounded-full shadow-sm backdrop-blur-md">
+                <button
+                  onClick={handleReset}
+                  className="p-2 rounded-full hover:bg-white dark:hover:bg-gray-700 transition-colors text-gray-600 dark:text-gray-300"
+                  title="Return Home"
+                >
+                  <span role="img" aria-label="Home">🏠</span>
+                </button>
+                <div className="h-4 w-px bg-gray-300 dark:bg-gray-600 mx-1"></div>
+                <button
+                  onClick={toggleMusic}
+                  className={`p-2 rounded-full hover:bg-white dark:hover:bg-gray-700 transition-colors ${
+                    musicEnabled
+                      ? 'text-teal-600 dark:text-teal-400'
+                      : 'text-gray-400 dark:text-gray-500'
+                  }`}
+                  title={musicEnabled ? 'Mute Background Music' : 'Enable Background Music'}
+                >
+                  {musicEnabled ? '🎵' : '🔈'}
+                </button>
+                <div className="h-4 w-px bg-gray-300 dark:bg-gray-600 mx-1"></div>
+                <button
+                  onClick={() => setDarkMode(!darkMode)}
+                  className="p-2 rounded-full hover:bg-white dark:hover:bg-gray-700 transition-colors text-gray-600 dark:text-gray-300"
+                  title={darkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+                >
+                  {darkMode ? '🌞' : '🌜'}
+                </button>
+              </div>
+            </header>
+            <main className="flex-grow flex flex-col items-center justify-center p-4 relative w-full max-w-4xl mx-auto">
+              {appState === AppState.IDLE && (
+                <div className="w-full flex flex-col items-center">
+                  <div className="mb-12 text-center space-y-4 animate-fade-in">
+                    <h1 className="text-4xl md:text-5xl font-light text-gray-800 dark:text-white tracking-tight">
+                      寻找你的
+                      <span className="font-serif italic text-gray-500 dark:text-gray-400">
+                        心流
+                      </span>
+                    </h1>
+                    <p className="text-gray-500 dark:text-gray-400 max-w-md mx-auto leading-relaxed">
+                      Find your flow. 选择一个心情，开始短暂的呼吸旅程与 AI 感悟。
+                    </p>
+                  </div>
+                  <MoodGrid onSelect={handleMoodSelect} />
+                </div>
+              )}
+              {appState === AppState.SELECT_DURATION && (
+                <DurationSelector
+                  onSelect={handleDurationSelect}
+                  onBack={() => setAppState(AppState.IDLE)}
+                />
+              )}
+              {appState === AppState.BREATHING && currentMoodConfig && (
+                <div className="w-full flex flex-col items-center justify-center min-h-[50vh]">
+                  <BreathingCircle
+                    onComplete={handleBreathingComplete}
+                    moodConfig={currentMoodConfig}
+                    duration={selectedDuration}
+                    musicEnabled={musicEnabled}
+                  />
+                </div>
+              )}
+              {appState === AppState.GENERATING && (
+                <div className="flex flex-col items-center gap-6 animate-pulse">
+                  <div className="text-5xl">✨</div>
+                  <p className="text-gray-500 dark:text-gray-400 font-light tracking-widest uppercase text-sm text-center">
+                    正在生成感悟...
+                    <br />
+                    <span className="text-xs opacity-70">Generating Insight...</span>
+                  </p>
+                </div>
+              )}
+              {appState === AppState.SHOWING_INSIGHT && insight && currentMoodConfig && (
+                <InsightCard data={insight} moodConfig={currentMoodConfig} onReset={handleReset} />
+              )}
+            </main>
+              <footer className="w-full p-6 text-center text-gray-400 dark:text-gray-600 text-sm font-light">
+                <p>© {new Date().getFullYear()} Mindful Moments. Powered by Gemini-inspired calm.</p>
+              </footer>
+            </div>
+          </div>
+        );
+      };
+
+      const rootElement = document.getElementById('root');
+      const root = ReactDOM.createRoot(rootElement);
+      root.render(
+        <React.StrictMode>
+          <App />
+        </React.StrictMode>
+      );
+    </script>
+</body>
+</html>
